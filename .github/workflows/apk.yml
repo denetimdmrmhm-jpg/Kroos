@@ -33,7 +33,11 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/android-sdk}}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          mkdir -p "$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
           SDK_BIN=""
           for candidate in "$ANDROID_HOME"/cmdline-tools/*/bin "$ANDROID_HOME"/cmdline-tools/latest/bin "$ANDROID_HOME"/tools/bin; do
             if [ -x "$candidate/sdkmanager" ]; then
@@ -66,8 +70,8 @@ jobs:
             echo "::error::Android SDK license acceptance failed (sdkmanager exit $license_status)"
             exit "$license_status"
           fi
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
-          sdkmanager --list_installed
+          sdkmanager --sdk_root="$ANDROID_HOME" --install "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager --sdk_root="$ANDROID_HOME" --list_installed
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -88,6 +92,20 @@ jobs:
           name: KROS-Kamera-OCR-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Print failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "::group::Android SDK diagnostics"
+          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
+          command -v sdkmanager || true
+          find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" -maxdepth 4 -name sdkmanager -print 2>/dev/null || true
+          echo "::endgroup::"
+          if [ -f build.log ]; then
+            echo "::group::Last 100 build log lines"
+            tail -n 100 build.log
+            echo "::endgroup::"
+          fi
       - name: Upload diagnostic log on failure
         if: failure()
         uses: actions/upload-artifact@v4
