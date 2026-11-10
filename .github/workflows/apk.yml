@@ -29,8 +29,13 @@ jobs:
           test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/kros/tartim/MainActivity.java
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Locate preinstalled Android SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          command -v sdkmanager
+          sdkmanager --version
       - name: Install Android SDK platform
         shell: bash
         run: |
