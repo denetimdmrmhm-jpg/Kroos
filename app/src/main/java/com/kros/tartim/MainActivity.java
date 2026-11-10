@@ -49,21 +49,55 @@ public class MainActivity extends Activity {
  @Override protected void onActivityResult(int req,int result,Intent data){super.onActivityResult(req,result,data);if(result!=RESULT_OK)return;Uri uri=req==1?photo:data==null?null:data.getData();if(uri==null)return;approved=false;status.setText("AI OCR taraması: dört yönde analiz ediliyor...");try{InputStream in=getContentResolver().openInputStream(uri);BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;BitmapFactory.decodeStream(in,null,options);in.close();int sample=1;while(Math.max(options.outWidth,options.outHeight)/sample>2200)sample*=2;options.inJustDecodeBounds=false;options.inSampleSize=sample;in=getContentResolver().openInputStream(uri);Bitmap bmp=BitmapFactory.decodeStream(in,null,options);in.close();if(bmp==null)throw new Exception("Görsel okunamadı");scan(bmp,0,null,-1);}catch(Exception e){status.setText("Görsel hatası: "+e.getMessage());}}
  void scan(Bitmap base,int rotation,Text best,int bestScore){if(rotation==4){base.recycle();if(best!=null)extract(best);else status.setText("OCR metni okunamadı");return;}Matrix m=new Matrix();m.postRotate(rotation*90);Bitmap rotated=rotation==0?base:Bitmap.createBitmap(base,0,0,base.getWidth(),base.getHeight(),m,true);TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).process(InputImage.fromBitmap(rotated,0)).addOnSuccessListener(t->{int score=t.getText().length()/40;for(Text.TextBlock b:t.getTextBlocks())for(Text.Line l:b.getLines()){String s=l.getText().toLowerCase(Locale.ROOT);if(s.contains("oran")||s.contains("malzeme")||s.contains("miktar"))score+=4;if(s.contains("%"))score+=2;}if(rotation!=0)rotated.recycle();scan(base,rotation+1,score>bestScore?t:best,Math.max(bestScore,score));}).addOnFailureListener(e->{if(rotation!=0)rotated.recycle();scan(base,rotation+1,best,bestScore);});}
  static class Cell{String s;Rect r;Cell(String s,Rect r){this.s=s;this.r=r;}}
- void extract(Text t){ArrayList<Cell> cells=new ArrayList<>();for(Text.TextBlock b:t.getTextBlocks())for(Text.Line l:b.getLines())if(l.getBoundingBox()!=null)cells.add(new Cell(l.getText().trim(),l.getBoundingBox()));Collections.sort(cells,(a,b)->Integer.compare(a.r.centerY(),b.r.centerY()));
- // Detect percentage column from header elements; do not confuse quantity with percentage.
- int column=-1,headerY=-1;for(Text.TextBlock b:t.getTextBlocks())for(Text.Line l:b.getLines())for(Text.Element e:l.getElements()){String s=e.getText().toLowerCase(Locale.ROOT).replace('ı','i');if(s.contains("oran")&&e.getBoundingBox()!=null){column=e.getBoundingBox().centerX();headerY=e.getBoundingBox().centerY();}}
- ArrayList<String[]> candidates=new ArrayList<>();Pattern percentage=Pattern.compile("(?<![\\d])([0-9]{1,2}(?:[,.][0-9]{1,3})?)\\s*%|%\\s*([0-9]{1,2}(?:[,.][0-9]{1,3})?)");
- for(int i=0;i<cells.size();i++){Cell c=cells.get(i);if(headerY>=0&&c.r.centerY()<=headerY)continue;String raw=c.s;String normalized=raw.toLowerCase(Locale.ROOT);if(normalized.contains("toplam")||normalized.contains("total")||normalized.contains("oran")||normalized.contains("miktar"))continue;
- Matcher match=percentage.matcher(raw);String percent=null;if(match.find())percent=match.group(1)!=null?match.group(1):match.group(2);
- // A number without % is only accepted in a geometrically identified percentage column.
- if(percent==null&&column>=0&&Math.abs(c.r.centerX()-column)<Math.max(35,c.r.height()*2)&&raw.matches("\\s*[0-9]{1,2}[,.][0-9]{1,3}\\s*"))percent=raw.trim();
- if(percent==null)continue;double val;try{val=number(percent);}catch(Exception ex){continue;}if(val<0||val>100)continue;
- String name=raw.replaceAll("(?<![\\d])[0-9]{1,2}(?:[,.][0-9]{1,3})?\\s*%|%\\s*[0-9]{1,2}(?:[,.][0-9]{1,3})?","").trim();
- if(name.length()<4){Cell closest=null;int distance=Integer.MAX_VALUE;for(Cell n:cells){if(n==c||n.r.centerX()>=c.r.centerX()||n.r.centerY()<=headerY)continue;int dy=Math.abs(n.r.centerY()-c.r.centerY());if(dy<Math.max(30,c.r.height()*2)&&dy<distance&&n.s.matches(".*[A-Za-zÇĞİÖŞÜçğıöşü].*")){closest=n;distance=dy;}}if(closest!=null)name=closest.s;}
- name=name.replaceFirst("^\\s*\\d{1,2}[.)-]\\s*","").trim();
- if(name.length()<4||!name.matches(".*[A-Za-zÇĞİÖŞÜçğıöşü].*"))continue;
- boolean duplicate=false;for(String[] old:candidates)if(old[0].equalsIgnoreCase(name))duplicate=true;if(!duplicate)candidates.add(new String[]{name,percent});}
- if(candidates.size()>0){loading=true;items.clear();rows.removeAllViews();for(String[] a:candidates)addItem(knownName(a[0]),a[1],a[0]);loading=false;}
- approved=false;refresh();status.setText("AI OCR: "+candidates.size()+" malzeme adayı. Eksik/yanlış satırları düzenleyin, oran toplamını doğrulayın. Öğrenme yalnızca operatör onayıyla kaydedilir.");
+ void extract(Text t){
+ ArrayList<Cell> lines=new ArrayList<>(),elements=new ArrayList<>();
+ for(Text.TextBlock b:t.getTextBlocks())for(Text.Line l:b.getLines()){
+  if(l.getBoundingBox()!=null)lines.add(new Cell(l.getText().trim(),l.getBoundingBox()));
+  for(Text.Element e:l.getElements())if(e.getBoundingBox()!=null)elements.add(new Cell(e.getText().trim(),e.getBoundingBox()));
  }
+ Collections.sort(lines,(a,b)->Integer.compare(a.r.centerY(),b.r.centerY()));
+ String full=t.getText();getSharedPreferences("kros_diagnostics",0).edit().putString("last_ocr",full).apply();
+ int column=-1,headerY=-1;
+ for(Cell e:elements){String s=e.s.toLowerCase(Locale.ROOT).replace('ı','i');if(s.contains("oran")&&e.r.centerY()<Math.max(400,lines.isEmpty()?400:lines.get(lines.size()-1).r.bottom)){column=e.r.centerX();headerY=e.r.centerY();break;}}
+ Pattern numeric=Pattern.compile("^[% ]*([0-9]{1,2}(?:[,.][0-9]{1,3})?)[% ]*$");
+ ArrayList<Cell> values=new ArrayList<>();
+ for(Cell e:elements){String raw=e.s.trim();Matcher m=numeric.matcher(raw);if(!m.matches())continue;try{double v=number(m.group(1));if(v>=0&&v<=100&&(headerY<0||e.r.centerY()>headerY))values.add(new Cell(m.group(1),e.r));}catch(Exception ignored){}}
+ // Only use a percentage column when a reliable header or explicit percent signs identify it.
+ if(column<0){ArrayList<Cell> marked=new ArrayList<>();for(Cell e:elements)if(e.s.contains("%"))marked.add(e);
+  if(marked.size()>=2){int sum=0;for(Cell e:marked)sum+=e.r.centerX();column=sum/marked.size();}
+ }
+ ArrayList<String[]> candidates=new ArrayList<>();HashSet<Integer> used=new HashSet<>();
+ if(column>=0){
+  for(Cell v:values){
+   if(Math.abs(v.r.centerX()-column)>Math.max(65,v.r.height()*5))continue;
+   Cell best=null;int score=Integer.MAX_VALUE;
+   for(Cell n:lines){
+    if(n.r.centerX()>=v.r.centerX()||n.r.centerY()<=headerY)continue;
+    String s=n.s.toLowerCase(Locale.ROOT);
+    if(s.contains("toplam")||s.contains("oran")||s.contains("miktar")||s.contains("malzeme")||!n.s.matches(".*[A-Za-zÇĞİÖŞÜçğıöşü].*"))continue;
+    int dy=Math.abs(n.r.centerY()-v.r.centerY());
+    if(dy>Math.max(38,n.r.height()*3))continue;
+    int dx=Math.abs(n.r.right-v.r.left);
+    int candidateScore=dy*4+dx/10;
+    if(candidateScore<score){best=n;score=candidateScore;}
+   }
+   if(best==null||used.contains(best.r.centerY()))continue;
+   String name=best.s.replaceFirst("^\\s*\\d{1,2}[.)-]\\s*","").trim();
+   if(name.length()<4)continue;
+   candidates.add(new String[]{name,v.s});used.add(best.r.centerY());
+  }
+ }
+ if(!candidates.isEmpty()){
+  loading=true;items.clear();rows.removeAllViews();
+  for(String[] entry:candidates)addItem(knownName(entry[0]),entry[1],entry[0]);
+  loading=false;
+ }
+ approved=false;refresh();
+ double sum=0;for(String[] entry:candidates)try{sum+=number(entry[1]);}catch(Exception ignored){}
+ status.setText("OCR: "+lines.size()+" satır, "+values.size()+" sayı, "+candidates.size()+" malzeme adayı. Oran toplamı: "+String.format(Locale.forLanguageTag("tr-TR"),"%.2f",sum)+"%. "+(column<0?"Oran sütunu güvenle belirlenemedi. ":"")+"Tüm değerleri belgeyle doğrulayın.");
+ if(candidates.isEmpty()){
+  new AlertDialog.Builder(this).setTitle("OCR tanılama").setMessage("Metin algılandı ancak güvenilir malzeme-oran eşleşmesi yapılamadı.\n\n"+(full.length()>1800?full.substring(0,1800):full)).setPositiveButton("Tamam",null).show();
+ }
+ }
+}
 }
