@@ -42,9 +42,15 @@ jobs:
             fi
           done
           if [ -z "$SDK_BIN" ]; then
-            echo "::error::sdkmanager is not installed under $ANDROID_HOME"
-            find "$ANDROID_HOME" -maxdepth 4 -name sdkmanager -print || true
-            exit 1
+            echo "::notice::Preinstalled sdkmanager missing; bootstrapping official Android command-line tools"
+            curl --fail --location --retry 3 --silent --show-error \
+              "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+              --output "${RUNNER_TEMP}/android-cmdline-tools.zip"
+            mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+            unzip -q "${RUNNER_TEMP}/android-cmdline-tools.zip" -d "${RUNNER_TEMP}/android-cmdline-tools"
+            cp -R "${RUNNER_TEMP}/android-cmdline-tools/cmdline-tools/." "$ANDROID_HOME/cmdline-tools/latest/"
+            SDK_BIN="$ANDROID_HOME/cmdline-tools/latest/bin"
+            test -x "$SDK_BIN/sdkmanager"
           fi
           echo "$SDK_BIN" >> "$GITHUB_PATH"
           "$SDK_BIN/sdkmanager" --version
