@@ -124,6 +124,42 @@ jobs:
           else
             echo "::warning::Failure occurred before Gradle; inspect step logs"
           fi
+      - name: Publish actionable checkup summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## KROS Android APK — modular checkup"
+            echo ""
+            echo "- Route: \`${{ matrix.route }}\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Gradle: \`${{ matrix.gradle }}\`"
+            echo "- Build step: \`${{ steps.compile.outcome }}\`"
+            echo ""
+            if [ -s app/build/outputs/apk/debug/app-debug.apk ]; then
+              echo "### APK produced"
+              sha256sum app/build/outputs/apk/debug/app-debug.apk
+            elif [ -f build.log ]; then
+              echo "### Failure diagnosis"
+              if grep -Eiq 'Could not resolve|Could not GET|Could not HEAD|Read timed out|Connection reset' build.log; then
+                echo "**Category:** dependency download / network"
+              elif grep -Eiq 'cannot find symbol|error:|Compilation failed' build.log; then
+                echo "**Category:** Java / Android source compilation"
+              elif grep -Eiq 'SDK location not found|Failed to find Platform SDK|License for package' build.log; then
+                echo "**Category:** Android SDK"
+              elif grep -Eiq 'Plugin .* was not found|Could not find com.android.tools.build' build.log; then
+                echo "**Category:** Gradle plugin resolution"
+              else
+                echo "**Category:** undetermined; inspect full Gradle failure"
+              fi
+              echo ""
+              echo '~~~text'
+              tail -n 90 build.log
+              echo '~~~'
+            else
+              echo "**Build log absent:** failed before Gradle execution; inspect preceding steps."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload diagnostic logs
         if: failure()
         uses: actions/upload-artifact@v4
