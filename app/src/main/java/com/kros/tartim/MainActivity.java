@@ -10,20 +10,42 @@ public class MainActivity extends Activity {
  void button(String s,Runnable r){Button b=new Button(this);b.setText(s);b.setOnClickListener(v->r.run());root.addView(b);}
  public void onCreate(Bundle b){super.onCreate(b);ScrollView sc=new ScrollView(this);root=new LinearLayout(this);root.setOrientation(1);root.setPadding(dp(16),dp(12),dp(16),dp(20));sc.addView(root);setContentView(sc);
  root.addView(label("KROS | Akilli Tartim"));button("Is emrinin fotografini cek",this::camera);button("Galeriden is emri sec",this::gallery);
- status=label("Ornek recete yuklendi. Fotograf okutun ve tum alanlari kontrol edin.");root.addView(status);root.addView(label("Is emri no"));order=new EditText(this);order.setSingleLine(true);order.setText("");root.addView(order);
- root.addView(label("Uretim miktari (kg)"));batch=num("2000");root.addView(batch);
- for(int i=0;i<7;i++){root.addView(label((i+1)+". "+names[i]));LinearLayout line=new LinearLayout(this);line.setOrientation(0);rates[i]=num(String.valueOf(preset[i]));rates[i].setHint("Oran %");actual[i]=num("");actual[i].setHint("Tartilan kg");line.addView(rates[i],new LinearLayout.LayoutParams(0,dp(55),1));line.addView(actual[i],new LinearLayout.LayoutParams(0,dp(55),1));root.addView(line);}
+ status=label("Is emri fotografini secin. OCR sonrasinda tum alanlari elle dogrulayin.");root.addView(status);root.addView(label("Is emri no"));order=new EditText(this);order.setSingleLine(true);order.setText("");root.addView(order);
+ root.addView(label("Uretim miktari (kg)"));batch=num("");root.addView(batch);
+ for(int i=0;i<7;i++){root.addView(label((i+1)+". "+names[i]));LinearLayout line=new LinearLayout(this);line.setOrientation(0);rates[i]=num("");rates[i].setHint("Oran %");actual[i]=num("");actual[i].setHint("Tartilan kg");line.addView(rates[i],new LinearLayout.LayoutParams(0,dp(55),1));line.addView(actual[i],new LinearLayout.LayoutParams(0,dp(55),1));root.addView(line);}
  TextWatcher invalidate=new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){if(!updating){approved=false;if(status!=null)status.setText("Recete veya miktar degisti; yeniden operator onayi gerekli.");}}public void afterTextChanged(Editable e){}};batch.addTextChangedListener(invalidate);order.addTextChangedListener(invalidate);for(EditText e:rates)e.addTextChangedListener(invalidate);for(EditText e:actual)e.addTextChangedListener(invalidate);
  button("Hedefleri hesapla",()->{approved=false;calculate();});button("Receteyi kontrol ettim, onayliyorum",()->{if(validate()){approved=true;calculate();status.setText("Operator onayi alindi.");}});
- summary=label("");root.addView(summary);button("Raporu paylas",()->{if(!approved){toast("Once receteyi dogrulayin");return;}Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,summary.getText().toString());startActivity(Intent.createChooser(i,"Rapor"));});calculate();}
+ summary=label("");root.addView(summary);button("Raporu paylas",()->{if(!approved){toast("Once receteyi dogrulayin");return;}Intent i=new Intent(Intent.ACTION_SEND);i.setType("text/plain");i.putExtra(Intent.EXTRA_TEXT,summary.getText().toString());startActivity(Intent.createChooser(i,"Rapor"));});summary.setText("Fotograf secin veya is emri bilgilerini girin. Onay verilmeden rapor paylasilamaz.");}
  void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}double parse(String s){return Double.parseDouble(s.trim().replace(" ","").replace(",","."));}
  boolean validate(){try{double sum=0;for(EditText e:rates){double v=parse(e.getText().toString());if(!Double.isFinite(v)||v<0||v>100)throw new Exception();sum+=v;}if(Math.abs(sum-100)>0.02){toast("Recete toplami %100 degil: "+sum);return false;}double amount=parse(batch.getText().toString());if(!Double.isFinite(amount)||amount<=0){toast("Uretim miktarini kontrol edin");return false;}for(EditText e:actual){String entered=e.getText().toString().trim();if(!entered.isEmpty()){double measured=parse(entered);if(!Double.isFinite(measured)||measured<0){toast("Tartilan kg degerlerini kontrol edin");return false;}}}return true;}catch(Exception e){toast("Oranlari ve miktari kontrol edin");return false;}}
  void calculate(){if(!validate())return;double b=parse(batch.getText().toString());StringBuilder out=new StringBuilder("Is emri: "+order.getText()+"\nUretim: "+b+" kg\n");int ok=0;for(int j=0;j<7;j++){double target=b*parse(rates[j].getText().toString())/100;out.append(names[j]).append(" | hedef ").append(String.format(Locale.US,"%.3f",target)).append(" kg");try{String a=actual[j].getText().toString();if(!a.isEmpty()){double diff=parse(a)-target;out.append(" | fark ").append(String.format(Locale.US,"%+.3f",diff));if(Math.abs(diff)<=0.05)ok++;}}catch(Exception ignored){}out.append("\n");}out.append("Ornek tolerans +-0.05 kg, uygun: ").append(ok).append("/7\nOperator onayi: ").append(approved?"EVET":"HAYIR");summary.setText(out.toString());}
  void camera(){try{android.content.ContentValues values=new android.content.ContentValues();values.put(MediaStore.Images.Media.DISPLAY_NAME,"kroos_"+System.currentTimeMillis()+".jpg");values.put(MediaStore.Images.Media.MIME_TYPE,"image/jpeg");photo=getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values);Intent i=new Intent(MediaStore.ACTION_IMAGE_CAPTURE);i.putExtra(MediaStore.EXTRA_OUTPUT,photo);i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);startActivityForResult(i,1);}catch(Exception e){toast("Kamera hatasi: "+e.getMessage());}}
  void gallery(){Intent i=new Intent(Intent.ACTION_GET_CONTENT);i.setType("image/*");startActivityForResult(i,2);}
  @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK)return;Uri uri=request==1?photo:(data==null?null:data.getData());if(uri==null){toast("Fotograf alinamadi");return;}approved=false;for(EditText rate:rates)rate.setText("");status.setText("Fotograf okunuyor... Tum oranlar yeniden dogrulanmali.");try{InputImage im=InputImage.fromFilePath(this,uri);TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).process(im).addOnSuccessListener(t->extract(t.getText())).addOnFailureListener(e->status.setText("OCR hatasi: "+e.getMessage()));}catch(Exception e){status.setText("Fotograf acilamadi: "+e.getMessage());}}
- void extract(String text){Matcher id=Pattern.compile("(?i)(?:is emri no|iş emri no)\\s*[:\\-]?\\s*([0-9]+[-/][0-9]+[-/][0-9]+)").matcher(text);if(id.find())order.setText(id.group(1));int found=0;
- for(String line:text.split("\\n")){String low=line.toLowerCase(Locale.ROOT);int ix=-1;if(low.contains("micron")||low.contains("glass fiber"))ix=1;else if(low.contains("ca-st"))ix=2;else if(low.contains("phenolic")||low.contains("antioxidant"))ix=3;else if(low.contains("mould release"))ix=4;else if(low.contains("richfos")||low.contains("irgafos"))ix=5;
- if(ix>=0){Matcher p=Pattern.compile("(?<![0-9])([0-9]{1,2}[,.][0-9]{1,5})(?![0-9])").matcher(line);while(p.find()){try{double v=parse(p.group(1));if(v>=0&&v<=100){rates[ix].setText(String.valueOf(v));found++;break;}}catch(Exception ignored){}}}}
- status.setText("OCR: "+found+" satir algilandi. Bos oranlari is emrinden elle girin; her satiri kontrol edin. Otomatik onay verilmez.");if(found==7)calculate();}
+ void extract(String text){
+  String normalized=text.replace('İ','I').replace('ı','i').toLowerCase(Locale.ROOT);
+  Matcher id=Pattern.compile("(?i)(?:is\\s*emri\\s*no|iş\\s*emri\\s*no)\\s*[:\\-]?\\s*([0-9]+(?:[-/][0-9]+)*)").matcher(text);
+  if(id.find())order.setText(id.group(1));
+  // The total order quantity must be verified manually: a table's "Miktar" is an ingredient quantity.
+  int found=0;boolean[] seen=new boolean[7];
+  for(String line:text.split("\\n")){
+   String low=line.toLowerCase(Locale.ROOT).replace('İ','i').replace('ı','i');
+   int ix=-1;
+   if(low.contains("2.51")||low.contains("2,51"))ix=0;
+   else if(low.contains("micron")||low.contains("glass fiber"))ix=1;
+   else if(low.contains("ca-st")||low.contains("ca st"))ix=2;
+   else if(low.contains("phenolic")||low.contains("antioxidant"))ix=3;
+   else if(low.contains("mould release"))ix=4;
+   else if(low.contains("richfos")||low.contains("irgafos"))ix=5;
+   else if(low.contains("3.21")||low.contains("3,21"))ix=6;
+   if(ix<0||seen[ix])continue;
+   // A single OCR line may include material codes, lot numbers and quantities.
+   // Never infer a percentage from an arbitrary number in such a line.
+   Matcher m=Pattern.compile("(?i)(?:oran|%)\\s*[:=]?\\s*([0-9]{1,2}[,.][0-9]{1,4})").matcher(line);
+   if(m.find()){try{double v=parse(m.group(1));if(v>=0&&v<=100){rates[ix].setText(String.valueOf(v));seen[ix]=true;found++;}}catch(Exception ignored){}}
+  }
+  approved=false;
+  summary.setText("OCR metni alindi. Oranlari, is emri numarasini ve toplam uretim miktarini orijinal belgeyle karsilastirin.");
+  status.setText("OCR: "+found+"/7 oran guvenli eslestirildi. Tablo sutunlari karisabilecegi icin belirsiz oranlar bos birakildi. Operator dogrulamasi zorunlu.");
+ }
 }
