@@ -1,4 +1,4 @@
-name: KROS Camera OCR APK
+name: KROS Modular APK Checkup
 on:
   push:
     branches: [main]
@@ -6,70 +6,97 @@ on:
 permissions:
   contents: read
 jobs:
+  checkup:
+    name: Source and configuration checkup
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check required project modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in settings.gradle build.gradle app/build.gradle app/src/main/AndroidManifest.xml app/src/main/java/com/kros/tartim/MainActivity.java; do
+            test -s "$file" || { echo "::error file=$file::Missing or empty source module"; exit 1; }
+          done
+          grep -q "include ':app'" settings.gradle
+          grep -q "com.android.application" build.gradle
+          grep -q "com.google.mlkit:text-recognition" app/build.gradle
+          echo "Source module checkup passed"
   build:
-    name: Build and verify debug APK
+    name: APK / ${{ matrix.route }}
+    needs: checkup
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    continue-on-error: ${{ matrix.route == 'recovery' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - route: primary
+            gradle: '8.9'
+          - route: recovery
+            gradle: '8.10.2'
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       - name: Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - name: Verify source tree
-        shell: bash
-        run: |
-          set -euxo pipefail
-          java -version
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-          test -f app/src/main/AndroidManifest.xml
-          test -f app/src/main/java/com/kros/tartim/MainActivity.java
-      - name: Prepare Android SDK command line tools
+      - name: Android SDK checkup and repair
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p "$ANDROID_HOME/cmdline-tools"
-          SDKMANAGER=""
+          TOOL=""
           for f in "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager "$ANDROID_HOME"/tools/bin/sdkmanager; do
-            if [ -x "$f" ]; then SDKMANAGER="$f"; break; fi
+            if [ -x "$f" ]; then TOOL="$f"; break; fi
           done
-          if [ -z "$SDKMANAGER" ]; then
-            curl --fail --location --retry 3 --silent --show-error \
-              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
-              -o "$RUNNER_TEMP/android-tools.zip"
-            mkdir -p "$RUNNER_TEMP/android-tools" "$ANDROID_HOME/cmdline-tools/latest"
-            unzip -q "$RUNNER_TEMP/android-tools.zip" -d "$RUNNER_TEMP/android-tools"
-            cp -R "$RUNNER_TEMP/android-tools/cmdline-tools/." "$ANDROID_HOME/cmdline-tools/latest/"
-            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -z "$TOOL" ]; then
+            curl --fail --location --retry 3 --retry-all-errors --silent --show-error https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o "$RUNNER_TEMP/tools.zip"
+            mkdir -p "$RUNNER_TEMP/tools" "$ANDROID_HOME/cmdline-tools/latest"
+            unzip -q "$RUNNER_TEMP/tools.zip" -d "$RUNNER_TEMP/tools"
+            cp -R "$RUNNER_TEMP/tools/cmdline-tools/." "$ANDROID_HOME/cmdline-tools/latest/"
+            TOOL="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           fi
-          test -x "$SDKMANAGER"
-          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
-          "$SDKMANAGER" --version
-      - name: Install SDK 35
-        shell: bash
-        run: |
-          set -euxo pipefail
+          test -x "$TOOL"
+          echo "$(dirname "$TOOL")" >> "$GITHUB_PATH"
           mkdir -p "$ANDROID_HOME/licenses"
           printf '%s\n' '8933bad161af4178b1185d1a37fbf41ea5269c55' 'd56f5187479451eabf01fb78af6dfcb131a6481e' > "$ANDROID_HOME/licenses/android-sdk-license"
-          sdkmanager --sdk_root="$ANDROID_HOME" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
-          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
-      - name: Gradle 8.9
+          "$TOOL" --sdk_root="$ANDROID_HOME" --install "platforms;android-35" "build-tools;35.0.0"
+          test -s "$ANDROID_HOME/platforms/android-35/android.jar"
+      - name: Gradle ${{ matrix.gradle }}
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
-      - name: Clean and rebuild debug APK
+          gradle-version: ${{ matrix.gradle }}
+      - name: Clean build with bounded transient retry
+        id: compile
         shell: bash
         run: |
-          set -o pipefail
-          gradle --no-daemon --stacktrace --console=plain clean assembleDebug 2>&1 | tee build.log
-      - name: Validate debug APK
+          set -uo pipefail
+          gradle --no-daemon --stacktrace --console=plain clean assembleDebug > build.log 2>&1
+          result=$?
+          if [ "$result" -ne 0 ]; then
+            echo "::group::First build failure"
+            tail -n 110 build.log
+            echo "::endgroup::"
+            if grep -Eiq 'Read timed out|Connection reset|Could not GET|Could not HEAD|Temporary failure in name resolution|Remote host terminated the handshake|429 Too Many Requests|503 Service Unavailable' build.log; then
+              echo "::notice::Transient dependency/network issue detected; one bounded retry"
+              sleep 10
+              gradle --no-daemon --refresh-dependencies --stacktrace --console=plain assembleDebug > retry.log 2>&1
+              result=$?
+              cat retry.log >> build.log
+            fi
+          fi
+          if [ "$result" -ne 0 ]; then
+            echo "::error::Build failed on ${{ matrix.route }}; inspect KROS-Diagnostics-${{ matrix.route }}"
+            tail -n 140 build.log
+            exit "$result"
+          fi
+      - name: Verify APK archive and checksum
         shell: bash
         run: |
           set -euxo pipefail
@@ -77,34 +104,33 @@ jobs:
           test -s "$APK"
           unzip -t "$APK" | tail -n 2
           sha256sum "$APK"
-          ls -lh "$APK"
-      - name: Publish APK
+      - name: Publish verified APK
         uses: actions/upload-artifact@v4
         with:
-          name: KROS-Kamera-OCR-APK
+          name: KROS-APK-${{ matrix.route }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
-      - name: Print diagnostics if failed
+      - name: Classify failed module
         if: failure()
         shell: bash
         run: |
-          echo "::group::Environment"
-          java -version || true
-          gradle --version || true
-          command -v sdkmanager || true
-          ls -la "$ANDROID_HOME/platforms" || true
-          echo "::endgroup::"
           if [ -f build.log ]; then
-            echo "::group::Gradle failure detail"
-            tail -n 180 build.log
-            echo "::endgroup::"
+            if grep -Eiq 'Could not resolve|Could not GET|Could not HEAD|Read timed out|Connection reset' build.log; then echo "::warning::Category: dependency or network"; fi
+            if grep -Eiq 'error:|Compilation failed|cannot find symbol' build.log; then echo "::warning::Category: Java compilation"; fi
+            if grep -Eiq 'SDK location not found|Failed to find Platform SDK|License for package' build.log; then echo "::warning::Category: Android SDK"; fi
+            if grep -Eiq 'Plugin .* was not found|Could not find com.android.tools.build' build.log; then echo "::warning::Category: Gradle plugin resolution"; fi
+            tail -n 160 build.log
+          else
+            echo "::warning::Failure occurred before Gradle; inspect step logs"
           fi
-      - name: Publish failure log
+      - name: Upload diagnostic logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: KROS-Derleme-Hata-Kaydi
-          path: build.log
+          name: KROS-Diagnostics-${{ matrix.route }}
+          path: |
+            build.log
+            retry.log
           if-no-files-found: ignore
           retention-days: 14
