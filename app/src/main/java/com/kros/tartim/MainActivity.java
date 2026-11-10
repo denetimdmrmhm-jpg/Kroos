@@ -1,6 +1,6 @@
 package com.kros.tartim;
 import android.app.*;import android.os.*;import android.content.*;import android.net.Uri;import android.provider.MediaStore;import android.text.InputType;import android.text.TextWatcher;import android.text.Editable;import android.view.*;import android.widget.*;
-import com.google.mlkit.vision.common.InputImage;import com.google.mlkit.vision.text.TextRecognition;import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
+import com.google.mlkit.vision.common.InputImage;import com.google.mlkit.vision.text.Text;import android.graphics.Rect;import com.google.mlkit.vision.text.TextRecognition;import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 import java.util.*;import java.util.regex.*;
 public class MainActivity extends Activity {
  final String[] names={"PA6 Natural RV 2.51-2.80","13 Micron Glass Fiber","CA-ST Granul","Phenolic Antioxidant","Mould Release Agent","Richfos 168G / Irgafos 168FF","PA6 Natural RV 3.21-3.60"};
@@ -21,31 +21,62 @@ public class MainActivity extends Activity {
  void calculate(){if(!validate())return;double b=parse(batch.getText().toString());StringBuilder out=new StringBuilder("Is emri: "+order.getText()+"\nUretim: "+b+" kg\n");int ok=0;for(int j=0;j<7;j++){double target=b*parse(rates[j].getText().toString())/100;out.append(names[j]).append(" | hedef ").append(String.format(Locale.US,"%.3f",target)).append(" kg");try{String a=actual[j].getText().toString();if(!a.isEmpty()){double diff=parse(a)-target;out.append(" | fark ").append(String.format(Locale.US,"%+.3f",diff));if(Math.abs(diff)<=0.05)ok++;}}catch(Exception ignored){}out.append("\n");}out.append("Ornek tolerans +-0.05 kg, uygun: ").append(ok).append("/7\nOperator onayi: ").append(approved?"EVET":"HAYIR");summary.setText(out.toString());}
  void camera(){try{android.content.ContentValues values=new android.content.ContentValues();values.put(MediaStore.Images.Media.DISPLAY_NAME,"kroos_"+System.currentTimeMillis()+".jpg");values.put(MediaStore.Images.Media.MIME_TYPE,"image/jpeg");photo=getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values);Intent i=new Intent(MediaStore.ACTION_IMAGE_CAPTURE);i.putExtra(MediaStore.EXTRA_OUTPUT,photo);i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);startActivityForResult(i,1);}catch(Exception e){toast("Kamera hatasi: "+e.getMessage());}}
  void gallery(){Intent i=new Intent(Intent.ACTION_GET_CONTENT);i.setType("image/*");startActivityForResult(i,2);}
- @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK)return;Uri uri=request==1?photo:(data==null?null:data.getData());if(uri==null){toast("Fotograf alinamadi");return;}approved=false;for(EditText rate:rates)rate.setText("");status.setText("Fotograf okunuyor... Tum oranlar yeniden dogrulanmali.");try{InputImage im=InputImage.fromFilePath(this,uri);TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).process(im).addOnSuccessListener(t->extract(t.getText())).addOnFailureListener(e->status.setText("OCR hatasi: "+e.getMessage()));}catch(Exception e){status.setText("Fotograf acilamadi: "+e.getMessage());}}
- void extract(String text){
-  String normalized=text.replace('İ','I').replace('ı','i').toLowerCase(Locale.ROOT);
-  Matcher id=Pattern.compile("(?i)(?:is\\s*emri\\s*no|iş\\s*emri\\s*no)\\s*[:\\-]?\\s*([0-9]+(?:[-/][0-9]+)*)").matcher(text);
+ @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK)return;Uri uri=request==1?photo:(data==null?null:data.getData());if(uri==null){toast("Fotograf alinamadi");return;}approved=false;for(EditText rate:rates)rate.setText("");status.setText("Fotograf okunuyor... Tum oranlar yeniden dogrulanmali.");try{InputImage im=InputImage.fromFilePath(this,uri);TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).process(im).addOnSuccessListener(this::extractTable).addOnFailureListener(e->status.setText("OCR hatasi: "+e.getMessage()));}catch(Exception e){status.setText("Fotograf acilamadi: "+e.getMessage());}}
+
+ int materialIndex(String s){
+  String q=s.toLowerCase(Locale.ROOT).replace('ı','i');
+  if(q.contains("2.51")||q.contains("2,51"))return 0;
+  if(q.contains("micron")||q.contains("glass fiber"))return 1;
+  if(q.contains("ca-st")||q.contains("ca st"))return 2;
+  if(q.contains("phenolic")||q.contains("antioxidant"))return 3;
+  if(q.contains("mould release"))return 4;
+  if(q.contains("richfos")||q.contains("irgafos"))return 5;
+  if(q.contains("3.21")||q.contains("3,21"))return 6;
+  return -1;
+ }
+ static class OcrCell {String s;Rect r;OcrCell(String s,Rect r){this.s=s;this.r=r;}}
+ void extractTable(Text result){
+  ArrayList<OcrCell> cells=new ArrayList<>();
+  for(Text.TextBlock b:result.getTextBlocks())for(Text.Line line:b.getLines())
+   if(line.getBoundingBox()!=null)cells.add(new OcrCell(line.getText(),line.getBoundingBox()));
+  String full=result.getText();
+  Matcher id=Pattern.compile("(?i)(?:is|iş)\\s*emri\\s*no\\s*[:\\-]?\\s*([0-9]+(?:[-/][0-9]+)*)").matcher(full);
   if(id.find())order.setText(id.group(1));
-  // The total order quantity must be verified manually: a table's "Miktar" is an ingredient quantity.
-  int found=0;boolean[] seen=new boolean[7];
-  for(String line:text.split("\\n")){
-   String low=line.toLowerCase(Locale.ROOT).replace('İ','i').replace('ı','i');
-   int ix=-1;
-   if(low.contains("2.51")||low.contains("2,51"))ix=0;
-   else if(low.contains("micron")||low.contains("glass fiber"))ix=1;
-   else if(low.contains("ca-st")||low.contains("ca st"))ix=2;
-   else if(low.contains("phenolic")||low.contains("antioxidant"))ix=3;
-   else if(low.contains("mould release"))ix=4;
-   else if(low.contains("richfos")||low.contains("irgafos"))ix=5;
-   else if(low.contains("3.21")||low.contains("3,21"))ix=6;
-   if(ix<0||seen[ix])continue;
-   // A single OCR line may include material codes, lot numbers and quantities.
-   // Never infer a percentage from an arbitrary number in such a line.
-   Matcher m=Pattern.compile("(?i)(?:oran|%)\\s*[:=]?\\s*([0-9]{1,2}[,.][0-9]{1,4})").matcher(line);
-   if(m.find()){try{double v=parse(m.group(1));if(v>=0&&v<=100){rates[ix].setText(String.valueOf(v));seen[ix]=true;found++;}}catch(Exception ignored){}}
+  // Detect the percentage column geometrically, never confuse it with quantity or lot numbers.
+  int percentX=-1;int headerY=-1;
+  for(OcrCell cell:cells){
+   String s=cell.s.toLowerCase(Locale.ROOT).replace('ı','i');
+   if(s.contains("malzeme orani")||s.contains("malzeme oranı")){
+    percentX=cell.r.centerX();headerY=cell.r.centerY();break;
+   }
+  }
+  int found=0;
+  if(percentX>=0){
+   ArrayList<OcrCell> rowNames=new ArrayList<>();
+   for(OcrCell cell:cells)if(materialIndex(cell.s)>=0&&cell.r.centerY()>headerY)rowNames.add(cell);
+   // Rows may wrap; choose the nearest percentage cell to each material row.
+   boolean[] used=new boolean[7];
+   for(OcrCell name:rowNames){
+    int ix=materialIndex(name.s);if(ix<0||used[ix])continue;
+    OcrCell best=null;double bestScore=Double.MAX_VALUE;
+    for(OcrCell candidate:cells){
+     if(candidate.r.centerY()<=headerY||candidate.r.centerX()<=name.r.centerX())continue;
+     String raw=candidate.s.trim().replace("%","").replace(" ","");
+     if(!raw.matches("[0-9]{1,2}[,.][0-9]{1,4}"))continue;
+     double value;try{value=parse(raw);}catch(Exception e){continue;}
+     if(value<0||value>100)continue;
+     int dx=Math.abs(candidate.r.centerX()-percentX);
+     int dy=Math.abs(candidate.r.centerY()-name.r.centerY());
+     int height=Math.max(name.r.height(),candidate.r.height());
+     if(dx>Math.max(55,height*4)||dy>height*2)continue;
+     double score=dx+dy*2.0;
+     if(score<bestScore){best=candidate;bestScore=score;}
+    }
+    if(best!=null){rates[ix].setText(String.valueOf(parse(best.s.replace("%",""))));used[ix]=true;found++;}
+   }
   }
   approved=false;
-  summary.setText("OCR metni alindi. Oranlari, is emri numarasini ve toplam uretim miktarini orijinal belgeyle karsilastirin.");
-  status.setText("OCR: "+found+"/7 oran guvenli eslestirildi. Tablo sutunlari karisabilecegi icin belirsiz oranlar bos birakildi. Operator dogrulamasi zorunlu.");
+  summary.setText("OCR sonucu taslaktir. Is emri, miktar ve oranlari orijinal belge ile dogrulayin.");
+  status.setText("OCR: "+found+"/7 oran konumsal eslestirildi. "+(percentX<0?"Oran sutunu bulunamadi. ":"")+"Belirsiz alanlar bos birakildi; operator onayi zorunlu.");
  }
 }
