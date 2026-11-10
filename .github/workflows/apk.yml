@@ -34,8 +34,20 @@ jobs:
         run: |
           set -euxo pipefail
           echo "ANDROID_HOME=${ANDROID_HOME:-}"
-          command -v sdkmanager
-          sdkmanager --version
+          SDK_BIN=""
+          for candidate in "$ANDROID_HOME"/cmdline-tools/*/bin "$ANDROID_HOME"/cmdline-tools/latest/bin "$ANDROID_HOME"/tools/bin; do
+            if [ -x "$candidate/sdkmanager" ]; then
+              SDK_BIN="$candidate"
+              break
+            fi
+          done
+          if [ -z "$SDK_BIN" ]; then
+            echo "::error::sdkmanager is not installed under $ANDROID_HOME"
+            find "$ANDROID_HOME" -maxdepth 4 -name sdkmanager -print || true
+            exit 1
+          fi
+          echo "$SDK_BIN" >> "$GITHUB_PATH"
+          "$SDK_BIN/sdkmanager" --version
       - name: Install Android SDK platform
         shell: bash
         run: |
