@@ -154,7 +154,15 @@ jobs:
               fi
               echo ""
               echo '~~~text'
-              tail -n 90 build.log
+              awk '
+                /FAILURE: Build failed with an exception/ { show=1; count=0 }
+                show && count < 85 { print; count++ }
+              ' build.log | head -n 85
+              echo '~~~'
+              echo ""
+              echo "### Error signatures"
+              echo '~~~text'
+              grep -n -m 15 -E '(^\\* What went wrong:|^> |^Caused by:|^\\s*Caused by:|Could not resolve|Could not find|Could not GET|Could not HEAD|No matching variant|Execution failed for task|Plugin .* was not found|FAILURE:)' build.log || true
               echo '~~~'
             else
               echo "**Build log absent:** failed before Gradle execution; inspect preceding steps."
