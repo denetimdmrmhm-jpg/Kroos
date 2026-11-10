@@ -35,8 +35,15 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          set +o pipefail
+          yes | sdkmanager --licenses > /dev/null
+          license_status=${PIPESTATUS[1]}
+          set -o pipefail
+          if [ "$license_status" -ne 0 ]; then
+            echo "::error::Android SDK license acceptance failed (sdkmanager exit $license_status)"
+            exit "$license_status"
+          fi
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
           sdkmanager --list_installed
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
